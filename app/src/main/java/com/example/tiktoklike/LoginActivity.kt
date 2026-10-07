@@ -32,7 +32,12 @@ class LoginActivity : AppCompatActivity() {
         WebViewCompat.setProfile(w, profileId)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
-        w.settings.userAgentString = w.settings.userAgentString.replace("; wv", "")
+        w.settings.userAgentString = DESKTOP_UA
+        w.settings.useWideViewPort = true
+        w.settings.loadWithOverviewMode = true
+        w.settings.setSupportZoom(true)
+        w.settings.builtInZoomControls = true
+        w.settings.displayZoomControls = false
         w.webViewClient = TikTokWebViewClient()
         findViewById<FrameLayout>(R.id.webHolder).addView(
             w, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT

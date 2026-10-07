@@ -5,6 +5,10 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 
+/** UA desktop: versi mobile TikTok hanya menampilkan halaman "buka di app" tanpa tombol like yang bisa diklik. */
+const val DESKTOP_UA =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+
 /** Ambil bentuk link bersih https://www.tiktok.com/@user/video/ID dari link apa pun yang memuatnya. */
 fun cleanTikTokUrl(input: String): String? {
     val m = Regex("""tiktok\.com/(@[\w.\-]+)/video/(\d+)""").find(Uri.decode(input)) ?: return null

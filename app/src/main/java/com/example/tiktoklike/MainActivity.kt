@@ -24,6 +24,11 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONTokener
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -163,9 +168,11 @@ class MainActivity : AppCompatActivity() {
         job = lifecycleScope.launch {
             var liked = 0
             try {
+                val target = if (cleanTikTokUrl(url) != null) url else resolveUrl(url)
+                log("Link video: $target")
                 accounts.forEachIndexed { i, acc ->
                     log("[${i + 1}/${accounts.size}] ${acc.label}: membuka video...")
-                    val r = likeWith(acc, url)
+                    val r = likeWith(acc, target)
                     if (r == "CLICKED" || r == "LIKED" || r == "UNKNOWN") liked++
                     log("   → " + describe(r))
                     if (i < accounts.lastIndex) {
@@ -203,7 +210,9 @@ class MainActivity : AppCompatActivity() {
             WebViewCompat.setProfile(web, acc.id) // sebelum load apa pun
             web.settings.javaScriptEnabled = true
             web.settings.domStorageEnabled = true
-            web.settings.userAgentString = web.settings.userAgentString.replace("; wv", "")
+            web.settings.userAgentString = DESKTOP_UA
+            web.settings.useWideViewPort = true
+            web.settings.loadWithOverviewMode = true
 
             val loaded = CompletableDeferred<Unit>()
             web.webViewClient = object : TikTokWebViewClient() {
@@ -220,7 +229,15 @@ class MainActivity : AppCompatActivity() {
             withTimeoutOrNull(30_000) { loaded.await() } ?: return "TIMEOUT"
             delay(Random.nextLong(4_000, 7_000)) // tunggu halaman benar-benar render
 
-            val first = web.eval(CLICK_JS)
+            // Halaman desktop TikTok berat; coba beberapa kali sampai tombol like muncul
+            var first = "NOT_FOUND"
+            repeat(5) {
+                if (first == "NOT_FOUND") {
+                    first = web.eval(CLICK_JS)
+                    if (first == "NOT_FOUND") delay(3_000)
+                }
+            }
+            if (first == "NOT_FOUND") log("   [debug] " + web.evalString(DIAG_JS))
             if (first != "CLICKED") return first
             delay(2_500)
             return web.eval(CHECK_JS)
@@ -228,6 +245,36 @@ class MainActivity : AppCompatActivity() {
             runContainer.removeAllViews()
             web.destroy()
             runCatching { ProfileStore.getInstance().getProfile(acc.id)?.cookieManager?.flush() }
+        }
+    }
+
+    /** Ikuti redirect link pendek (vt.tiktok.com / vm.tiktok.com) sampai ketemu link video aslinya. */
+    private suspend fun resolveUrl(url: String): String = withContext(Dispatchers.IO) {
+        var cur = url
+        repeat(6) {
+            val c = URL(cur).openConnection() as HttpURLConnection
+            try {
+                c.instanceFollowRedirects = false
+                c.connectTimeout = 10_000
+                c.readTimeout = 10_000
+                c.setRequestProperty("User-Agent", DESKTOP_UA)
+                val code = c.responseCode
+                if (code !in 300..399) return@withContext cur
+                val loc = c.getHeaderField("Location") ?: return@withContext cur
+                cur = URL(URL(cur), loc).toString()
+                cleanTikTokUrl(cur)?.let { return@withContext it }
+            } catch (e: Exception) {
+                return@withContext cur
+            } finally {
+                c.disconnect()
+            }
+        }
+        cur
+    }
+
+    private suspend fun WebView.evalString(js: String): String = suspendCancellableCoroutine { c ->
+        evaluateJavascript(js) { raw ->
+            c.resume(runCatching { JSONTokener(raw).nextValue().toString() }.getOrDefault(raw ?: "NULL"))
         }
     }
 
@@ -250,6 +297,13 @@ class MainActivity : AppCompatActivity() {
   if(btn.getAttribute('aria-pressed')==='true') return 'ALREADY';
   btn.click();
   return 'CLICKED';
+})()
+"""
+        private const val DIAG_JS = """
+(function(){
+  var s={};
+  document.querySelectorAll('[data-e2e]').forEach(function(e){s[e.getAttribute('data-e2e')]=1});
+  return location.href.substring(0,150)+' | '+document.title+' | '+Object.keys(s).slice(0,40).join(',');
 })()
 """
         private const val CHECK_JS = """
