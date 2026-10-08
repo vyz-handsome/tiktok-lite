@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -121,8 +122,12 @@ class MainActivity : AppCompatActivity() {
     private fun accountMenu(acc: Account) {
         AlertDialog.Builder(this)
             .setTitle(acc.label)
-            .setItems(arrayOf("Login ulang", "Hapus akun")) { _, which ->
-                if (which == 0) openLogin(acc) else deleteAccount(acc)
+            .setItems(arrayOf("Buka video di browser akun ini", "Login ulang", "Hapus akun")) { _, which ->
+                when (which) {
+                    0 -> openVideoIn(acc)
+                    1 -> openLogin(acc)
+                    else -> deleteAccount(acc)
+                }
             }
             .show()
     }
@@ -132,6 +137,22 @@ class MainActivity : AppCompatActivity() {
             Intent(this, LoginActivity::class.java)
                 .putExtra("id", acc.id).putExtra("label", acc.label)
         )
+    }
+
+    /** Buka link video (dari kolom Beranda) di browser akun ini, untuk tes manual. */
+    private fun openVideoIn(acc: Account) {
+        val raw = etUrl.text.toString().trim()
+        if (raw.isEmpty()) {
+            Toast.makeText(this, "Tempel link video di Beranda dulu.", Toast.LENGTH_LONG).show()
+            return
+        }
+        lifecycleScope.launch {
+            val target = cleanTikTokUrl(raw) ?: resolveUrl(raw)
+            startActivity(
+                Intent(this@MainActivity, LoginActivity::class.java)
+                    .putExtra("id", acc.id).putExtra("label", acc.label).putExtra("url", target)
+            )
+        }
     }
 
     private fun deleteAccount(acc: Account) {
@@ -248,7 +269,9 @@ class MainActivity : AppCompatActivity() {
             val f = web.width / iw
             tap(web, cx * f, cy * f)
             delay(4_000)
-            if (web.eval(CHECK_JS) == "LOGIN") return "LOGIN"
+            val ui = web.eval(CHECK_JS)
+            log("   [debug] ketukan di (${cx.toInt()},${cy.toInt()}) px-css, lebar halaman ${iw.toInt()}; tampilan setelah ketuk: $ui")
+            if (ui == "LOGIN") return "LOGIN"
 
             // Verifikasi sebenarnya: muat ulang halaman, lihat apakah like tersimpan di akun
             loaded = CompletableDeferred()
@@ -264,7 +287,10 @@ class MainActivity : AppCompatActivity() {
             }
             return when (state) {
                 "LIKED" -> "VERIFIED"
-                "NOTLIKED" -> "NOT_SAVED"
+                "NOTLIKED" -> {
+                    log("   [debug] " + web.evalString(PAGE_DIAG_JS).replace("\n", " | "))
+                    "NOT_SAVED"
+                }
                 else -> {
                     log("   [debug] " + web.evalString(DIAG_JS))
                     "UNKNOWN"
@@ -278,10 +304,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun tap(web: WebView, x: Float, y: Float) {
-        val t = SystemClock.uptimeMillis()
-        web.dispatchTouchEvent(MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, x, y, 0))
+        val down = SystemClock.uptimeMillis()
+        val d = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN, x, y, 0)
+        d.source = InputDevice.SOURCE_TOUCHSCREEN // tanpa ini sebagian WebView mengabaikan ketukan
+        web.dispatchTouchEvent(d)
+        d.recycle()
         delay(90)
-        web.dispatchTouchEvent(MotionEvent.obtain(t, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x, y, 0))
+        val u = MotionEvent.obtain(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x, y, 0)
+        u.source = InputDevice.SOURCE_TOUCHSCREEN
+        web.dispatchTouchEvent(u)
+        u.recycle()
     }
 
     /** Ikuti redirect link pendek (vt.tiktok.com / vm.tiktok.com) sampai ketemu link video aslinya. */

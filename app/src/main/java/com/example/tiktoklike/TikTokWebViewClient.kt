@@ -35,3 +35,13 @@ open class TikTokWebViewClient : WebViewClient() {
         return true // blokir semua skema non-http(s)
     }
 }
+
+/** Ringkasan halaman untuk diagnosis: alamat, judul, ada tidaknya tombol login, dan elemen data-e2e yang ada. */
+const val PAGE_DIAG_JS = """
+(function(){
+  var s={};
+  document.querySelectorAll('[data-e2e]').forEach(function(e){s[e.getAttribute('data-e2e')]=1});
+  var login=!!document.querySelector('[data-e2e="top-login-button"]');
+  return 'url='+location.href.substring(0,120)+'\ntitle='+document.title+'\ntombolLogin='+(login?'ADA (kemungkinan belum login)':'tidak ada')+'\nelemen='+Object.keys(s).slice(0,40).join(',');
+})()
+"""

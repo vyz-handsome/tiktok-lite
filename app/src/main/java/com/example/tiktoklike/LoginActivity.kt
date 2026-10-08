@@ -7,7 +7,9 @@ import android.webkit.WebView
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import org.json.JSONTokener
 import androidx.webkit.ProfileStore
 import androidx.webkit.WebViewCompat
 
@@ -24,7 +26,7 @@ class LoginActivity : AppCompatActivity() {
 
         profileId = intent.getStringExtra("id") ?: return finish()
         findViewById<TextView>(R.id.tvTitle).text =
-            "Login: " + (intent.getStringExtra("label") ?: profileId)
+            (if (intent.hasExtra("url")) "Browser: " else "Login: ") + (intent.getStringExtra("label") ?: profileId)
 
         val w = WebView(this)
         // setProfile HARUS dipanggil sebelum WebView memuat apa pun.
@@ -43,9 +45,16 @@ class LoginActivity : AppCompatActivity() {
             w, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
         )
         web = w
-        w.loadUrl("https://www.tiktok.com/login")
+        w.loadUrl(intent.getStringExtra("url") ?: "https://www.tiktok.com/login")
 
         findViewById<Button>(R.id.btnDone).setOnClickListener { finish() }
+        findViewById<Button>(R.id.btnCheck).setOnClickListener {
+            w.evaluateJavascript(PAGE_DIAG_JS) { raw ->
+                val txt = runCatching { JSONTokener(raw).nextValue().toString() }.getOrDefault(raw ?: "NULL")
+                AlertDialog.Builder(this).setTitle("Status halaman").setMessage(txt)
+                    .setPositiveButton("OK", null).show()
+            }
+        }
     }
 
     override fun onPause() {
