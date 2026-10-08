@@ -3,6 +3,8 @@ package com.example.tiktoklike
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -173,7 +175,7 @@ class MainActivity : AppCompatActivity() {
                 accounts.forEachIndexed { i, acc ->
                     log("[${i + 1}/${accounts.size}] ${acc.label}: membuka video...")
                     val r = likeWith(acc, target)
-                    if (r == "CLICKED" || r == "LIKED" || r == "UNKNOWN") liked++
+                    if (r == "VERIFIED") liked++
                     log("   → " + describe(r))
                     if (i < accounts.lastIndex) {
                         val d = Random.nextLong(20_000, 60_001)
@@ -191,8 +193,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun describe(r: String) = when (r) {
-        "CLICKED", "LIKED" -> "berhasil di-like"
-        "UNKNOWN" -> "klik terkirim, tapi tidak bisa diverifikasi"
+        "VERIFIED" -> "berhasil di-like (terverifikasi setelah muat ulang)"
+        "NOT_SAVED" -> "ketukan terkirim tapi like TIDAK tersimpan di akun (setelah dimuat ulang belum di-like)"
+        "UNKNOWN" -> "ketukan terkirim, tapi status like tidak bisa diverifikasi"
         "ALREADY" -> "sudah di-like sebelumnya, dilewati"
         "NOT_FOUND" -> "tombol like tidak ketemu (selector berubah / halaman belum siap)"
         "LOGIN" -> "perlu login ulang (menu Add Account → ketuk akun)"
@@ -214,7 +217,7 @@ class MainActivity : AppCompatActivity() {
             web.settings.useWideViewPort = true
             web.settings.loadWithOverviewMode = true
 
-            val loaded = CompletableDeferred<Unit>()
+            var loaded = CompletableDeferred<Unit>()
             web.webViewClient = object : TikTokWebViewClient() {
                 override fun onPageFinished(view: WebView?, u: String?) {
                     if (!loaded.isCompleted) loaded.complete(Unit)
@@ -238,14 +241,47 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             if (first == "NOT_FOUND") log("   [debug] " + web.evalString(DIAG_JS))
-            if (first != "CLICKED") return first
-            delay(2_500)
-            return web.eval(CHECK_JS)
+            if (!first.startsWith("POS|")) return first
+
+            // Ketukan sentuh asli (bukan sekadar JS click) di posisi tombol like
+            val (cx, cy, iw) = first.split("|").drop(1).map { it.toFloat() }
+            val f = web.width / iw
+            tap(web, cx * f, cy * f)
+            delay(4_000)
+            if (web.eval(CHECK_JS) == "LOGIN") return "LOGIN"
+
+            // Verifikasi sebenarnya: muat ulang halaman, lihat apakah like tersimpan di akun
+            loaded = CompletableDeferred()
+            web.reload()
+            withTimeoutOrNull(30_000) { loaded.await() }
+            delay(6_000)
+            var state = "NOBTN"
+            repeat(4) {
+                if (state == "NOBTN") {
+                    state = web.eval(STATE_JS)
+                    if (state == "NOBTN") delay(3_000)
+                }
+            }
+            return when (state) {
+                "LIKED" -> "VERIFIED"
+                "NOTLIKED" -> "NOT_SAVED"
+                else -> {
+                    log("   [debug] " + web.evalString(DIAG_JS))
+                    "UNKNOWN"
+                }
+            }
         } finally {
             runContainer.removeAllViews()
             web.destroy()
             runCatching { ProfileStore.getInstance().getProfile(acc.id)?.cookieManager?.flush() }
         }
+    }
+
+    private suspend fun tap(web: WebView, x: Float, y: Float) {
+        val t = SystemClock.uptimeMillis()
+        web.dispatchTouchEvent(MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, x, y, 0))
+        delay(90)
+        web.dispatchTouchEvent(MotionEvent.obtain(t, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x, y, 0))
     }
 
     /** Ikuti redirect link pendek (vt.tiktok.com / vm.tiktok.com) sampai ketemu link video aslinya. */
@@ -295,8 +331,21 @@ class MainActivity : AppCompatActivity() {
   if(!icon) return document.querySelector('[data-e2e="login-modal"],#login-modal') ? 'LOGIN' : 'NOT_FOUND';
   var btn=icon.closest('button')||icon;
   if(btn.getAttribute('aria-pressed')==='true') return 'ALREADY';
-  btn.click();
-  return 'CLICKED';
+  btn.scrollIntoView({block:'center',inline:'center'});
+  var r=btn.getBoundingClientRect();
+  if(r.width===0||r.height===0) return 'NOT_FOUND';
+  return 'POS|'+(r.left+r.width/2)+'|'+(r.top+r.height/2)+'|'+window.innerWidth;
+})()
+"""
+        private const val STATE_JS = """
+(function(){
+  var icon=document.querySelector('[data-e2e="like-icon"],[data-e2e="browse-like-icon"]');
+  if(!icon) return 'NOBTN';
+  var btn=icon.closest('button')||icon;
+  var p=btn.getAttribute('aria-pressed');
+  if(p==='true') return 'LIKED';
+  if(p==='false') return 'NOTLIKED';
+  return 'NOBTN';
 })()
 """
         private const val DIAG_JS = """
