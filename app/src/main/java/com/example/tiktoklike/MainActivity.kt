@@ -81,6 +81,7 @@ class MainActivity : AppCompatActivity() {
 
         findViewById<Button>(R.id.btnAdd).setOnClickListener { addAccountDialog() }
         lvAccounts.setOnItemClickListener { _, _, pos, _ -> accountMenu(store.all()[pos]) }
+        findViewById<Button>(R.id.btnManual).setOnClickListener { startManual() }
         btnLike.setOnClickListener { startLiking() }
         btnStop.setOnClickListener { job?.cancel() }
 
@@ -170,6 +171,20 @@ class MainActivity : AppCompatActivity() {
     private fun log(msg: String) {
         tvLog.append(msg + "\n")
         logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    /** Mode manual: buka layar per akun, pengguna menekan like sendiri. */
+    private fun startManual() {
+        val raw = etUrl.text.toString().trim()
+        when {
+            !multiProfile -> return log("WebView belum mendukung multi-profile.")
+            !raw.contains("tiktok.com") -> return log("Link tidak valid. Tempel link video TikTok.")
+            store.all().isEmpty() -> return log("Belum ada akun. Tambah dulu di menu Add Account.")
+        }
+        lifecycleScope.launch {
+            val target = cleanTikTokUrl(raw) ?: resolveUrl(raw)
+            startActivity(Intent(this@MainActivity, ManualLikeActivity::class.java).putExtra("url", target))
+        }
     }
 
     private fun startLiking() {
