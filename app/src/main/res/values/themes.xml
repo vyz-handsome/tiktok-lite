@@ -1,3 +1,10 @@
 <resources>
-    <style name="Theme.TikTokLike" parent="Theme.Material3.DayNight.NoActionBar" />
+    <style name="Theme.TikTokLike" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#D81B4F</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#FFD9E0</item>
+        <item name="colorOnPrimaryContainer">#40000F</item>
+        <item name="colorSecondaryContainer">#FFD9E0</item>
+        <item name="colorOnSecondaryContainer">#40000F</item>
+    </style>
 </resources>

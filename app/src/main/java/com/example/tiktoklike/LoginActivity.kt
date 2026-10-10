@@ -34,6 +34,7 @@ class LoginActivity : AppCompatActivity() {
         WebViewCompat.setProfile(w, profileId)
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
+        w.settings.allowFileAccess = false
         w.settings.userAgentString = DESKTOP_UA
         w.settings.useWideViewPort = true
         w.settings.loadWithOverviewMode = true

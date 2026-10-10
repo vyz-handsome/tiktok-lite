@@ -26,6 +26,9 @@ class AccountStore(context: Context) {
         return acc
     }
 
+    fun rename(id: String, label: String) =
+        save(all().map { if (it.id == id) it.copy(label = label) else it })
+
     fun remove(id: String) = save(all().filter { it.id != id })
 
     private fun save(list: List<Account>) {

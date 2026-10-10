@@ -1,19 +1,24 @@
 package com.example.tiktoklike
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.os.Bundle
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.FrameLayout
 import android.widget.TextView
-import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.ProfileStore
 import androidx.webkit.WebViewCompat
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -32,11 +37,16 @@ class ManualLikeActivity : AppCompatActivity() {
     private var web: WebView? = null
     private var currentId: String? = null
     private var pollJob: Job? = null
+    private var needReload = false
+    private var loadFailed = false
+    private var finished = false
     private val liked = mutableSetOf<String>()
+    private val already = mutableSetOf<String>()
 
     private lateinit var holder: FrameLayout
     private lateinit var tvTitle: TextView
     private lateinit var tvStatus: TextView
+    private lateinit var progressBar: LinearProgressIndicator
     private lateinit var btnPrev: Button
     private lateinit var btnNext: Button
     private lateinit var cbAuto: CheckBox
@@ -45,28 +55,69 @@ class ManualLikeActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_manual)
 
-        url = intent.getStringExtra("url") ?: return finish()
-        accounts = AccountStore(this).all()
-        if (accounts.isEmpty()) return finish()
+        val u = intent.getStringExtra("url")
+        val list = AccountStore(this).all()
+        if (u == null || list.isEmpty()) {
+            finish()
+            return
+        }
+        url = u
+        accounts = list
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         holder = findViewById(R.id.holder)
         tvTitle = findViewById(R.id.tvTitle)
         tvStatus = findViewById(R.id.tvStatus)
+        progressBar = findViewById(R.id.progress)
         btnPrev = findViewById(R.id.btnPrev)
         btnNext = findViewById(R.id.btnNext)
         cbAuto = findViewById(R.id.cbAuto)
+        progressBar.max = accounts.size
 
         btnPrev.setOnClickListener { go(index - 1) }
         btnNext.setOnClickListener { if (index == accounts.lastIndex) finishRun() else go(index + 1) }
         findViewById<Button>(R.id.btnFocus).setOnClickListener {
             lifecycleScope.launch { web?.eval(FOCUS_JS) }
         }
+        findViewById<Button>(R.id.btnReload).setOnClickListener { go(index) }
+        findViewById<Button>(R.id.btnLogin).setOnClickListener { openLogin() }
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                AlertDialog.Builder(this@ManualLikeActivity)
+                    .setTitle("Keluar dari mode manual?")
+                    .setMessage("${liked.size} dari ${accounts.size} akun sudah ter-like.")
+                    .setPositiveButton("Keluar") { _, _ -> finishRun() }
+                    .setNegativeButton("Lanjut", null)
+                    .show()
+            }
+        })
+
         go(0)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Kembali dari layar login: muat ulang halaman supaya memakai sesi yang baru.
+        if (needReload && !finished) {
+            needReload = false
+            go(index)
+        }
+    }
+
     private fun updateTitle() {
-        tvTitle.text = "Akun ${index + 1}/${accounts.size}: ${accounts[index].label}  (ter-like: ${liked.size})"
+        tvTitle.text = "Akun ${index + 1}/${accounts.size}: ${accounts[index].label}   (ter-like: ${liked.size})"
+    }
+
+    private fun openLogin() {
+        val acc = accounts[index]
+        pollJob?.cancel()
+        releaseWeb()
+        needReload = true
+        startActivity(
+            Intent(this, LoginActivity::class.java)
+                .putExtra("id", acc.id).putExtra("label", acc.label)
+        )
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -75,9 +126,11 @@ class ManualLikeActivity : AppCompatActivity() {
         index = i
         pollJob?.cancel()
         releaseWeb()
+        loadFailed = false
 
         val acc = accounts[i]
         updateTitle()
+        progressBar.setProgressCompat(i + 1, true)
         btnPrev.isEnabled = i > 0
         btnNext.text = if (i == accounts.lastIndex) "Selesai" else "Berikutnya"
         tvStatus.text = "Memuat video..."
@@ -88,13 +141,20 @@ class ManualLikeActivity : AppCompatActivity() {
         currentId = acc.id
         w.settings.javaScriptEnabled = true
         w.settings.domStorageEnabled = true
+        w.settings.allowFileAccess = false
         w.settings.userAgentString = DESKTOP_UA
         w.settings.useWideViewPort = true
         w.settings.loadWithOverviewMode = true
         w.settings.setSupportZoom(true)
         w.settings.builtInZoomControls = true
         w.settings.displayZoomControls = false
-        w.webViewClient = TikTokWebViewClient()
+        w.webViewClient = object : TikTokWebViewClient() {
+            override fun onReceivedError(
+                view: WebView?, request: WebResourceRequest?, error: WebResourceError?
+            ) {
+                if (request?.isForMainFrame == true) loadFailed = true
+            }
+        }
         holder.addView(w, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         web = w
         w.loadUrl(url)
@@ -104,36 +164,62 @@ class ManualLikeActivity : AppCompatActivity() {
 
     private suspend fun poll(w: WebView, acc: Account) {
         delay(4_000)
-        var prepared = false
+        var focused = false
+        var firstReading = true
+        var missing = 0
         while (true) {
             val st = w.eval(STATE_JS)
             if (st == "NOBTN") {
-                tvStatus.text = "Mencari tombol like... (kalau lama, scroll sendiri atau tekan \"Ke tombol like\")"
+                missing++
+                tvStatus.text = when {
+                    loadFailed -> "Gagal memuat halaman. Cek internet lalu tekan \"Muat ulang\"."
+                    missing > 15 -> "Tombol like tidak ketemu. Kalau akun ini belum login, tekan \"Login ulang\". Atau tekan \"Muat ulang\"."
+                    else -> "Mencari tombol like..."
+                }
             } else {
-                if (!prepared) {
+                missing = 0
+                if (!focused) {
                     w.eval(FOCUS_JS)
-                    prepared = true
+                    focused = true
                 }
                 if (st == "LIKED") {
+                    if (firstReading) already.add(acc.id)
                     liked.add(acc.id)
                     updateTitle()
-                    tvStatus.text = "✓ Sudah di-like"
+                    tvStatus.text = if (acc.id in already) "✓ Sudah di-like sebelumnya" else "✓ Sudah di-like"
                     if (cbAuto.isChecked) {
                         delay(1_500)
                         if (index == accounts.lastIndex) finishRun() else go(index + 1)
                         return
                     }
                 } else {
+                    w.eval(MARK_JS) // tanda merah bisa hilang kalau TikTok merender ulang
                     tvStatus.text = "Tekan tombol like yang ditandai merah"
                 }
+                firstReading = false
             }
             delay(1_000)
         }
     }
 
     private fun finishRun() {
-        Toast.makeText(this, "Selesai: ${liked.size} dari ${accounts.size} akun ter-like", Toast.LENGTH_LONG).show()
-        finish()
+        if (finished) return
+        finished = true
+        pollJob?.cancel()
+        releaseWeb()
+        val summary = accounts.joinToString("\n") { a ->
+            when {
+                a.id in already -> "✓ ${a.label} (sudah di-like sebelumnya)"
+                a.id in liked -> "✓ ${a.label}"
+                else -> "✗ ${a.label} (belum)"
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Selesai: ${liked.size} dari ${accounts.size} akun ter-like")
+            .setMessage(summary)
+            .setCancelable(false)
+            .setPositiveButton("Tutup") { _, _ -> finish() }
+            .show()
     }
 
     private fun releaseWeb() {
@@ -163,6 +249,22 @@ class ManualLikeActivity : AppCompatActivity() {
   return btn.getAttribute('aria-pressed')==='true' ? 'LIKED' : 'NOTLIKED';
 })()
 """
+        // Hanya menandai (idempotent), tanpa menggulir - aman dipanggil berulang.
+        private const val MARK_JS = """
+(function(){
+  var icon=document.querySelector('[data-e2e="like-icon"],[data-e2e="browse-like-icon"]');
+  if(!icon) return 'NOBTN';
+  var btn=icon.closest('button')||icon;
+  btn.style.outline='4px solid #ff2d55';
+  btn.style.borderRadius='50%';
+  btn.style.transformOrigin='center';
+  btn.style.transform='scale(2)';
+  btn.style.position='relative';
+  btn.style.zIndex='99999';
+  return 'OK';
+})()
+"""
+        // Menggulir tombol ke tengah layar lalu menandainya.
         private const val FOCUS_JS = """
 (function(){
   var icon=document.querySelector('[data-e2e="like-icon"],[data-e2e="browse-like-icon"]');

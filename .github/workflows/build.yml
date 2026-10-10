@@ -26,15 +26,24 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
 
+      # Sidik jari tanda tangan harus SAMA di setiap build, kalau tidak Android menolak update.
+      - name: Cek tanda tangan APK
+        continue-on-error: true
+        run: |
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          echo "### Build #${{ github.run_number }}" >> "$GITHUB_STEP_SUMMARY"
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk | grep -i "SHA-256" | tee -a "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v4
         with:
           name: TikTokLike-debug
           path: app/build/outputs/apk/debug/app-debug.apk
 
-      # APK juga diunggah ke Release "latest" supaya gampang di-download dari HP
+      # APK juga diunggah ke Release "latest" (langsung .apk, bukan zip) supaya gampang di-download dari HP
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest build
+          body: "Build #${{ github.run_number }} (versi 1.1.${{ github.run_number }})"
           prerelease: true
           files: app/build/outputs/apk/debug/app-debug.apk

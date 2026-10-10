@@ -1,6 +1,8 @@
 package com.example.tiktoklike
 
 import android.annotation.SuppressLint
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.SystemClock
@@ -10,7 +12,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -26,17 +27,18 @@ import androidx.webkit.ProfileStore
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.google.android.material.bottomnavigation.BottomNavigationView
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import org.json.JSONTokener
-import java.net.HttpURLConnection
-import java.net.URL
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONTokener
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.coroutines.resume
 import kotlin.random.Random
 
@@ -50,6 +52,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStop: Button
     private lateinit var runContainer: FrameLayout
     private lateinit var tvLog: TextView
+    private lateinit var tvAccCount: TextView
     private lateinit var logScroll: ScrollView
     private lateinit var lvAccounts: ListView
 
@@ -68,8 +71,11 @@ class MainActivity : AppCompatActivity() {
         btnStop = findViewById(R.id.btnStop)
         runContainer = findViewById(R.id.runContainer)
         tvLog = findViewById(R.id.tvLog)
+        tvAccCount = findViewById(R.id.tvAccCount)
         logScroll = findViewById(R.id.logScroll)
         lvAccounts = findViewById(R.id.lvAccounts)
+        lvAccounts.emptyView = findViewById(R.id.tvEmpty)
+        findViewById<TextView>(R.id.tvVersion).text = versionLabel()
 
         findViewById<BottomNavigationView>(R.id.bottomNav).setOnItemSelectedListener {
             val home = it.itemId == R.id.nav_home
@@ -80,6 +86,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<Button>(R.id.btnAdd).setOnClickListener { addAccountDialog() }
+        findViewById<Button>(R.id.btnPaste).setOnClickListener { pasteFromClipboard() }
+        findViewById<Button>(R.id.btnClearLog).setOnClickListener { tvLog.text = "" }
         lvAccounts.setOnItemClickListener { _, _, pos, _ -> accountMenu(store.all()[pos]) }
         findViewById<Button>(R.id.btnManual).setOnClickListener { startManual() }
         btnLike.setOnClickListener { startLiking() }
@@ -92,14 +100,59 @@ class MainActivity : AppCompatActivity() {
         refreshAccounts()
     }
 
+    override fun onResume() {
+        super.onResume()
+        refreshAccounts() // daftar akun bisa berubah setelah kembali dari layar login
+    }
+
+    @Suppress("DEPRECATION")
+    private fun versionLabel(): String =
+        runCatching { "Versi " + packageManager.getPackageInfo(packageName, 0).versionName }
+            .getOrDefault("")
+
+    private fun pasteFromClipboard() {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val text = cm.primaryClip?.takeIf { it.itemCount > 0 }
+            ?.getItemAt(0)?.coerceToText(this)?.toString()?.trim().orEmpty()
+        if (text.isEmpty()) {
+            Toast.makeText(this, "Clipboard kosong.", Toast.LENGTH_SHORT).show()
+        } else {
+            etUrl.setText(text)
+            etUrl.setSelection(etUrl.text.length)
+        }
+    }
+
     // ───────────────────────── Add Account ─────────────────────────
 
     private fun refreshAccounts() {
         val list = store.all()
-        lvAccounts.adapter = ArrayAdapter(
-            this, android.R.layout.simple_list_item_1,
-            list.map { "${it.label}  (${it.id})" }
-        )
+        tvAccCount.text = if (list.isEmpty()) "Belum ada akun" else "${list.size} akun terdaftar"
+        lvAccounts.adapter = object : ArrayAdapter<Account>(this, R.layout.item_account, list) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val v = convertView ?: layoutInflater.inflate(R.layout.item_account, parent, false)
+                val a = getItem(position)!!
+                v.findViewById<TextView>(R.id.tvAvatar).text = a.label.take(1).uppercase()
+                v.findViewById<TextView>(R.id.tvName).text = a.label
+                v.findViewById<TextView>(R.id.tvSub).text = "Browser ${position + 1}  •  ketuk untuk opsi"
+                return v
+            }
+        }
+    }
+
+    private fun nameInput(initial: String, hint: String): EditText {
+        val et = EditText(this)
+        et.hint = hint
+        et.setText(initial)
+        et.setSelection(et.text.length)
+        return et
+    }
+
+    private fun withPadding(v: View): View {
+        val pad = (20 * resources.displayMetrics.density).toInt()
+        return FrameLayout(this).apply {
+            setPadding(pad, pad / 2, pad, 0)
+            addView(v)
+        }
     }
 
     private fun addAccountDialog() {
@@ -107,10 +160,10 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "WebView belum mendukung multi-profile. Update dulu.", Toast.LENGTH_LONG).show()
             return
         }
-        val et = EditText(this).apply { hint = "Nama akun (bebas, mis. akun utama)" }
+        val et = nameInput("", "Nama akun (bebas, mis. akun utama)")
         AlertDialog.Builder(this)
             .setTitle("Tambah akun")
-            .setView(et)
+            .setView(withPadding(et))
             .setPositiveButton("Lanjut login") { _, _ ->
                 val label = et.text.toString().trim().ifEmpty { "Akun ${store.all().size + 1}" }
                 openLogin(store.add(label))
@@ -123,17 +176,40 @@ class MainActivity : AppCompatActivity() {
     private fun accountMenu(acc: Account) {
         AlertDialog.Builder(this)
             .setTitle(acc.label)
-            .setItems(arrayOf("Buka video di browser akun ini", "Login ulang", "Hapus akun")) { _, which ->
+            .setItems(
+                arrayOf("Login ulang", "Buka video di browser akun ini", "Ganti nama", "Hapus akun")
+            ) { _, which ->
                 when (which) {
-                    0 -> openVideoIn(acc)
-                    1 -> openLogin(acc)
-                    else -> deleteAccount(acc)
+                    0 -> openLogin(acc)
+                    1 -> openVideoIn(acc)
+                    2 -> renameAccount(acc)
+                    else -> confirmDelete(acc)
                 }
             }
             .show()
     }
 
+    private fun renameAccount(acc: Account) {
+        val et = nameInput(acc.label, "Nama akun")
+        AlertDialog.Builder(this)
+            .setTitle("Ganti nama")
+            .setView(withPadding(et))
+            .setPositiveButton("Simpan") { _, _ ->
+                val n = et.text.toString().trim()
+                if (n.isNotEmpty()) {
+                    store.rename(acc.id, n)
+                    refreshAccounts()
+                }
+            }
+            .setNegativeButton("Batal", null)
+            .show()
+    }
+
     private fun openLogin(acc: Account) {
+        if (!multiProfile) {
+            Toast.makeText(this, "WebView belum mendukung multi-profile. Update dulu.", Toast.LENGTH_LONG).show()
+            return
+        }
         startActivity(
             Intent(this, LoginActivity::class.java)
                 .putExtra("id", acc.id).putExtra("label", acc.label)
@@ -156,17 +232,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun deleteAccount(acc: Account) {
+    private fun confirmDelete(acc: Account) {
         if (job?.isActive == true) {
             Toast.makeText(this, "Stop proses like dulu.", Toast.LENGTH_SHORT).show()
             return
         }
-        runCatching { ProfileStore.getInstance().deleteProfile(acc.id) }
-        store.remove(acc.id)
-        refreshAccounts()
+        AlertDialog.Builder(this)
+            .setTitle("Hapus akun?")
+            .setMessage("${acc.label} dan sesi login-nya akan dihapus dari app ini (akun TikTok aslinya tidak terpengaruh).")
+            .setPositiveButton("Hapus") { _, _ ->
+                runCatching { ProfileStore.getInstance().deleteProfile(acc.id) }
+                store.remove(acc.id)
+                refreshAccounts()
+            }
+            .setNegativeButton("Batal", null)
+            .show()
     }
 
-    // ───────────────────────── Beranda: proses like ─────────────────────────
+    // ───────────────────────── Beranda ─────────────────────────
 
     private fun log(msg: String) {
         tvLog.append(msg + "\n")
@@ -201,6 +284,7 @@ class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         btnLike.isEnabled = false
         btnStop.isEnabled = true
+        runContainer.visibility = View.VISIBLE
         tvLog.text = ""
 
         job = lifecycleScope.launch {
@@ -219,10 +303,14 @@ class MainActivity : AppCompatActivity() {
                         delay(d)
                     }
                 }
-                log("\nSelesai. $liked dari ${accounts.size} akun diproses.")
+                log("\nSelesai. $liked dari ${accounts.size} akun terverifikasi.")
+            } catch (e: CancellationException) {
+                log("\nDihentikan.")
+                throw e
             } finally {
                 btnLike.isEnabled = true
                 btnStop.isEnabled = false
+                runContainer.visibility = View.GONE
                 window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
         }
@@ -249,6 +337,7 @@ class MainActivity : AppCompatActivity() {
             WebViewCompat.setProfile(web, acc.id) // sebelum load apa pun
             web.settings.javaScriptEnabled = true
             web.settings.domStorageEnabled = true
+            web.settings.allowFileAccess = false
             web.settings.userAgentString = DESKTOP_UA
             web.settings.useWideViewPort = true
             web.settings.loadWithOverviewMode = true

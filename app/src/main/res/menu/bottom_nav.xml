@@ -2,10 +2,10 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item
         android:id="@+id/nav_home"
-        android:icon="@android:drawable/ic_menu_agenda"
+        android:icon="@drawable/ic_nav_home"
         android:title="Beranda" />
     <item
         android:id="@+id/nav_accounts"
-        android:icon="@android:drawable/ic_menu_add"
+        android:icon="@drawable/ic_nav_people"
         android:title="Add Account" />
 </menu>

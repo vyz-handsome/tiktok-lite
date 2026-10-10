@@ -3,20 +3,24 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Nomor build GitHub Actions dipakai sebagai versionCode. Tiap build otomatis lebih tinggi
+// dari sebelumnya, jadi Android menerimanya sebagai "update" yang menimpa app lama.
+val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+
 android {
     namespace = "com.example.tiktoklike"
     compileSdk = 35
 
     defaultConfig {
         applicationId = "com.example.tiktoklike"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = buildNumber
+        versionName = "1.1.$buildNumber"
     }
 
-    // Keystore debug tetap (di-commit) supaya APK hasil build selalu
-    // bisa di-update di atas versi lama tanpa uninstall (data login aman).
+    // Keystore tetap (di-commit di app/debug.keystore) -> tanda tangan APK selalu sama.
+    // JANGAN hapus/ganti file ini, kalau tidak update tidak bisa lagi menimpa app lama.
     signingConfigs {
         getByName("debug") {
             storeFile = file("debug.keystore")
